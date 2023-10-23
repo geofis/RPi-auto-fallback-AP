@@ -5,6 +5,7 @@ echo "Configurando el modo punto de acceso...\n"
 cp dispatchers/99-fallback /etc/NetworkManager/dispatcher.d/
 chmod +x /etc/NetworkManager/dispatcher.d/99-fallback
 echo "Creado exitosamente el punto de acceso.\n"
+systemctl restart NetworkManager
 
 # Copiar herramientas
 cp tools/create-network-credentials.sh /usr/local/bin/

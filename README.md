@@ -9,7 +9,19 @@
 
 - Instala un watchdog para vigilar la conexión WiFi. Si está ausente, pasa a la secundaria.
 
-TODO:
+## Instalación
+
+`sudo apt update`
+
+`sudo apt install git`
+
+`git clone https://github.com/geofis/RPi-auto-fallback-AP.git`
+
+`cd RPi-auto-fallback-AP`
+
+`sudo bash -x install.sh`
+
+## TODO:
 
 - Centralizar variables (SSID y PASS del AP) usando archivo config.txt (requiere script de creación de archivo config.txt).
 
