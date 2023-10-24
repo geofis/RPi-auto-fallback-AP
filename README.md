@@ -30,3 +30,5 @@
 - Crear logrotate para el log del watchdog.
 
 - Añadir función para activar el AP. Útil en situaciones en las que no se puede desconectar la infraestructura WiFi.
+
+- Al crear nueva conexión a red de infraestructura, diferir al próximo reinicio el borrado de la actual (si la hubiere).
