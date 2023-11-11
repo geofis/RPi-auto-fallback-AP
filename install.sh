@@ -1,5 +1,8 @@
 #!/bin/bash
 
+## PROBAR
+# set -e
+
 # Copiar script para habilitar el punto de acceso
 echo "Configurando el modo punto de acceso...\n"
 cp dispatchers/99-fallback /etc/NetworkManager/dispatcher.d/
