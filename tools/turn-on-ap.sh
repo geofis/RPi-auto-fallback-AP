@@ -21,6 +21,7 @@ if [[ -z $ACTIVE_CONNECTION ]]; then
     echo "Si puedes, cierra la conexión SSH con 'exit' o 'logout',"
     echo "conéctate a la Raspberry desde el punto de acceso $AP_NAME"
     echo "y accede nuevamente a ella por SSH"
+    echo "La clave de punto de acceso es 12345678"
     # Salir del script
     exit
 fi

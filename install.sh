@@ -30,6 +30,7 @@ systemctl start wifi-watchdog.service
 
 echo "Reinicia la Raspberry con 'sudo reboot'\n"
 echo "Tras reiniciar, conéctate a ella a través de la red 'GNSS'\n"
+echo "La clave de punto de acceso es 12345678"
 
 # Presiona ENTER para reiniciar
 read -p "Presiona ENTER para salir" x
