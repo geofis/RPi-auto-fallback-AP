@@ -15,6 +15,9 @@ cp tools/create-network-credentials.sh /usr/local/bin/
 chmod +x /usr/local/bin/create-network-credentials.sh
 cp tools/turn-off-ap.sh /usr/local/bin/
 chmod +x /usr/local/bin/turn-off-ap.sh
+cp tools/turn-on-ap.sh /usr/local/bin/
+chmod +x /usr/local/bin/turn-on-ap.sh
+
 
 # Copiar script y servicio vigia
 cp watchdogs/wifi-watchdog.sh /usr/local/bin/

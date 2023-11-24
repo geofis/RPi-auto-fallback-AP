@@ -31,7 +31,7 @@ Si lo que se necesita es conectar la Raspberry a una red de infraestructura WiFi
 
    Ejecuta `chmod 600 miRedWiFi.nmconnection`
 
-4. Si no lo está, **habilita SSH (si no está habilitado)**:
+4. Si no lo está, **habilita SSH**:
    
    Si ya tenías acceso SSH pero por alguna razón ya no puedes acceder, asegúrate de que el servicio SSH esté habilitado. Para ello, navega a la partición `boot` y verifica si hay un archivo llamado `ssh` (sin extensión). Si no está presente, crea uno. 
 
