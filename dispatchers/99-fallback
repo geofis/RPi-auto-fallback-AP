@@ -11,13 +11,17 @@ check_wifi() {
     nmcli -t -f DEVICE,STATE device | grep wlan0 | grep -q "connected"
 }
 
-activate_fallback() {
+create_fallback() {
     # Verifica si el AP ya está configurado
     if ! nmcli con show | grep -q "$fallback_ssid"; then
         nmcli con add type wifi ifname wlan0 con-name $fallback_ssid autoconnect yes ssid $fallback_ssid
         nmcli con modify $fallback_ssid 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared
         nmcli con modify $fallback_ssid 802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk $fallback_password
     fi
+}
+
+activate_fallback() {
+    create_fallback
     nmcli con up $fallback_ssid
 }
 
@@ -35,6 +39,9 @@ connect_to_known_network() {
     done
     return 1
 }
+
+# Crear fallback si no existe
+create_fallback
 
 # Si la interfaz es wlan0 y el estado es "up"
 if [ "$INTERFACE" == "wlan0" ] && [ "$STATUS" == "up" ]; then
