@@ -50,6 +50,8 @@ sudo systemctl start         'fallback-ap@wlan0.service'
 * `--pass` clave WPA2 (8–63 chars; por defecto `12345678`)
 * `--band` `bg` (2.4 GHz) o `a` (5 GHz); por defecto `bg`
 * `--chan` canal (por defecto `6`)
+* `--interval` intervalo de búsqueda de redes, en segundos (90s por defecto)
+* `--boot-delay` retardo luego del arranque, en segundos (20s por defecto)
 * `--no-powersave-tweak` no toca `wifi.powersave`
 * `--force` ejecuta evaluación inicial al terminar
 * `--status` muestra estado
@@ -63,6 +65,17 @@ El instalador:
 * Instala los *units* `fallback-ap@.service` y **`fallback-ap@.timer`** (plantilla).
 * Crea el hook `/etc/NetworkManager/dispatcher.d/50-fallback-ap`.
 * Habilita **`fallback-ap@wlan0.timer`** (o la interfaz que pases).
+
+**Funciones de ayuda:**
+
+```bash
+sudo fa-status                    # estado rapido
+sudo fa-force-ap                  # simula perdida y levanta AP ya
+sudo fa-force-client "TU_SSID"    # migra a cliente ya
+sudo fa-add-wifi SSID [PSK]       # crea perfil nuevo ejemplo sudo fa-add-wifi "Pa viejos" clave
+sudo fa-forget SSID               # olvida perfil
+sudo fa-list                      # despliega perfiles
+```
 
 ---
 

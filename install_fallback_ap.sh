@@ -7,11 +7,13 @@ set -Eeuo pipefail
 # Uso:
 #   sudo bash install_fallback_ap.sh --iface wlan0 --ssid GNSS --pass 12345678 --band bg --chan 6 --force
 # Opciones:
-#   --iface IFACE            (default: wlan0)
-#   --ssid  SSID             (default: GNSS)
-#   --pass  PSK              (8..63 chars; default: 12345678)
-#   --band  bg|a             (default: bg)
-#   --chan  N                (default: 6)
+#   --iface       IFACE      (default: wlan0)
+#   --ssid        SSID       (default: GNSS)
+#   --pass        PSK        (8..63 chars; default: 12345678)
+#   --band        bg|a       (default: bg)
+#   --chan        N          (default: 6)
+#   --interval    INTERVAL   (default: 90 segundos)
+#   --boot-delay  BOOT_DELAY (default: 20 segundos)
 #   --no-powersave-tweak     (no toca wifi.powersave)
 #   --force                  (lanza evaluación inicial ahora)
 #   --status                 (muestra estado servicio/timer y conexiones)
