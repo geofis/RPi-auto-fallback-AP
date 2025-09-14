@@ -26,6 +26,8 @@ CHAN="6"
 POWERSAVE=1
 MODE="install"
 FORCE=0
+INTERVAL="90"
+BOOT_DELAY="20"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +36,8 @@ while [[ $# -gt 0 ]]; do
     --pass|--psk) PASS="$2"; shift 2;;
     --band)  BAND="$2"; shift 2;;
     --chan|--channel) CHAN="$2"; shift 2;;
+    --interval)    INTERVAL="$2"; shift 2;;
+    --boot-delay)  BOOT_DELAY="$2"; shift 2;;
     --no-powersave-tweak) POWERSAVE=0; shift;;
     --force) FORCE=1; shift;;
     --status) MODE="status"; shift;;
@@ -83,6 +87,9 @@ esac
 [[ ${#PASS} -ge 8 && ${#PASS} -le 63 ]] || die "La clave --pass debe tener entre 8 y 63 caracteres."
 [[ "$BAND" =~ ^(bg|a)$ ]] || die "--band debe ser 'bg' (2.4GHz) o 'a' (5GHz)."
 [[ "$CHAN" =~ ^[0-9]+$ ]] || die "--chan debe ser un número."
+[[ "$INTERVAL" =~ ^[0-9]+([smhd])?$ ]]   || die "--interval debe ser número opc. con s/m/h/d (ej. 90, 45s, 2m)"
+[[ "$BOOT_DELAY" =~ ^[0-9]+([smhd])?$ ]] || die "--boot-delay igual (ej. 20, 10s, 1m)"
+
 
 # -------- Dependencias --------
 if ! command -v nmcli >/dev/null 2>&1; then
@@ -91,6 +98,7 @@ if ! command -v nmcli >/dev/null 2>&1; then
   apt-get install -y network-manager
   systemctl enable --now NetworkManager
 fi
+
 
 # -------- Limpieza restos antiguos --------
 log "Limpiando restos previos…"
@@ -101,6 +109,7 @@ rm -f /etc/NetworkManager/dispatcher.d/99-fallback 2>/dev/null || true
 # timer viejo no-plantilla (si lo hubiera)
 systemctl disable --now fallback-ap.timer 2>/dev/null || true
 rm -f /etc/systemd/system/fallback-ap.timer 2>/dev/null || true
+
 
 # -------- Config por defecto --------
 log "Escribiendo /etc/default/fallback-ap"
@@ -113,6 +122,7 @@ BAND="${BAND}"
 CHAN="${CHAN}"
 IFACE="${IFACE}"
 CFG
+
 
 # -------- Script principal --------
 log "Instalando /usr/local/sbin/fallback-ap.sh"
@@ -139,15 +149,12 @@ IFACE="${1:-$IFACE}"
 # nmcli “suave”: nunca rompe el script si falla
 nmq() { nmcli "$@" 2>/dev/null || return 0; }
 
-echo "fallback-ap: start iface=$IFACE ssid=$SSID band=$BAND chan=$CHAN"
-
 rfkill unblock wifi 2>/dev/null || true
 nmq radio wifi on
 nmq dev set "$IFACE" managed yes
 
 # Perfil AP idempotente
 if ! nmq -g NAME con show | grep -Fxq "fallback-ap"; then
-  echo "fallback-ap: creando perfil AP"
   nmq con add type wifi ifname "$IFACE" con-name "fallback-ap" ssid "$SSID"
   nmq con modify "fallback-ap" 802-11-wireless.mode ap \
                                 802-11-wireless.band "$BAND" \
@@ -165,17 +172,23 @@ last_ts=$( [ -f "$last_ts_file" ] && cat "$last_ts_file" || echo 0 )
 since=$((now - last_ts))
 min_interval=30
 
+# Si nunca hubo cambio de modo, inicializa timestamp para evitar números enormes
+if [ ! -s "$last_ts_file" ]; then
+  echo "$now" >"$last_ts_file"
+  since=0
+fi
+
 # Estado del dispositivo (si nmcli no reporta, deja 'unknown')
 current_state="$(nmq -t -f DEVICE,STATE device | awk -F: -v d="$IFACE" '$1==d{print $2}')"
 current_state="${current_state:-unknown}"
-echo "fallback-ap: $IFACE state=$current_state since_last_switch=${since}s"
 
 # Conexiones Wi-Fi conocidas (sin mirar autoconnect, más compatible)
 mapfile -t KNOWN <<< "$(nmq -t -f NAME,TYPE con show | awk -F: '$2=="wifi" && $1!="fallback-ap"{print $1}')"
 
-# ¿Qué conexión está activa en esta interfaz?
+# ¿Qué conexión está activa en esta interfaz? (para detectar si estamos en el AP)
 active_name="$(nmq -t -f NAME,DEVICE con show --active | awk -F: -v d="$IFACE" '$2==d{print $1}')"
-echo "fallback-ap: active_name=${active_name:-none}"
+mode="client"; [ "$active_name" = "fallback-ap" ] && mode="ap"
+echo "fallback-ap: check iface=$IFACE mode=$mode state=$current_state known=${#KNOWN[@]} since=${since}s"
 
 # Si estamos con el AP activo y hay redes conocidas, intenta migrar a cliente
 if [ "$active_name" = "fallback-ap" ] && [ "${#KNOWN[@]}" -gt 0 ]; then
@@ -213,7 +226,7 @@ if [ "$current_state" != "connected" ]; then
     echo "fallback-ap: backoff, último cambio hace ${since}s"
     exit 0
   fi
-  echo "fallback-ap: subiendo AP \"$SSID\""
+  echo "fallback-ap: subiendo AP \"$SSID\" (band=$BAND chan=$CHAN)"
   nmq -t -f NAME con show --active | grep -qx "fallback-ap" \
     || nmcli --wait 15 con up "fallback-ap" ifname "$IFACE" 2>/dev/null || true
   echo ap >"$last_mode_file"; echo "$now" >"$last_ts_file"
@@ -239,18 +252,17 @@ Wants=NetworkManager.service
 Type=oneshot
 EnvironmentFile=-/etc/default/fallback-ap
 ExecStart=/usr/local/sbin/fallback-ap.sh %I
-RemainAfterExit=yes
 SyslogIdentifier=fallback-ap
 UNIT
 
 # Timer plantilla por interfaz
-cat >/etc/systemd/system/fallback-ap@.timer <<'TIMER'
+cat >/etc/systemd/system/fallback-ap@.timer <<TIMER
 [Unit]
 Description=Revisión periódica de Wi-Fi conocida / cambio AP (%i)
 
 [Timer]
-OnBootSec=20
-OnActiveSec=90
+OnBootSec=${BOOT_DELAY}
+OnUnitActiveSec=${INTERVAL}
 AccuracySec=5s
 Persistent=true
 Unit=fallback-ap@%i.service
@@ -258,6 +270,7 @@ Unit=fallback-ap@%i.service
 [Install]
 WantedBy=timers.target
 TIMER
+
 
 # -------- Dispatcher NM --------
 log "Instalando hook dispatcher de NetworkManager"
@@ -281,6 +294,7 @@ case "$ACTION" in
 esac
 HOOK
 
+
 # -------- Powersave tweak (opcional) --------
 if [[ "$POWERSAVE" -eq 1 ]]; then
   log "Desactivando ahorro de energía Wi-Fi (wifi.powersave=2)"
@@ -291,6 +305,71 @@ wifi.powersave = 2
 PS
   systemctl restart NetworkManager || true
 fi
+
+
+# -------- Helpers opcionales --------
+install -m 0755 /dev/null /usr/local/sbin/fa-status /usr/local/sbin/fa-force-ap /usr/local/sbin/fa-force-client /usr/local/sbin/fa-add-wifi /usr/local/sbin/fa-forget /usr/local/sbin/fa-list 2>/dev/null || true
+
+cat >/usr/local/sbin/fa-status <<'H'
+#!/usr/bin/env bash
+nmcli -t -f NAME,TYPE,DEVICE,GENERAL.STATE con show --active
+echo
+systemctl status 'fallback-ap@wlan0.timer' --no-pager | sed -n '1,12p'
+echo
+systemctl status 'fallback-ap@wlan0.service' --no-pager | sed -n '1,12p'
+echo
+journalctl -t fallback-ap -n 20 --no-pager || true
+H
+
+cat >/usr/local/sbin/fa-force-ap <<'H'
+#!/usr/bin/env bash
+# Desactiva autoconnect en todas las Wi-Fi conocidas (excepto fallback-ap) y fuerza AP
+for n in $(nmcli -t -f NAME,TYPE con show | awk -F: '$2=="wifi" && $1!="fallback-ap"{print $1}'); do
+  nmcli con mod "$n" connection.autoconnect no
+done
+nmcli dev disconnect wlan0
+/usr/local/sbin/fallback-ap.sh wlan0 --force
+nmcli -t -f NAME,TYPE,DEVICE con show --active
+H
+
+cat >/usr/local/sbin/fa-force-client <<'H'
+#!/usr/bin/env bash
+SSID="$1"
+[ -n "$SSID" ] || { echo "Uso: fa-force-client <SSID>"; exit 1; }
+nmcli con mod "$SSID" connection.autoconnect yes 2>/dev/null || true
+nmcli con down id "fallback-ap" 2>/dev/null || true
+nmcli --wait 20 con up id "$SSID" ifname wlan0
+/usr/local/sbin/fallback-ap.sh wlan0 --force
+H
+
+cat >/usr/local/sbin/fa-add-wifi <<'H'
+#!/usr/bin/env bash
+SSID="$1"; PASS="${2:-}"
+[ -n "$SSID" ] || { echo "Uso: fa-add-wifi <SSID> [PSK]"; exit 1; }
+if [ -n "$PASS" ]; then
+  nmcli dev wifi connect "$SSID" password "$PASS" ifname wlan0
+else
+  nmcli dev wifi connect "$SSID" ifname wlan0
+fi
+H
+
+cat >/usr/local/sbin/fa-forget <<'H'
+#!/usr/bin/env bash
+SSID="$1"; [ -n "$SSID" ] || { echo "Uso: fa-forget <SSID>"; exit 1; }
+nmcli con del id "$SSID"
+H
+
+cat >/usr/local/sbin/fa-list <<'H'
+#!/usr/bin/env bash
+echo "[Perfiles Wi-Fi]"
+nmcli -t -f NAME,UUID,TYPE,AUTOCONNECT con show | awk -F: '$3=="wifi"{printf "  %-30s  UUID=%s  autoconnect=%s\n",$1,$2,$4}'
+echo
+echo "[Redes al alcance]"
+nmcli -f SSID,SECURITY,SIGNAL dev wifi list
+H
+
+chmod +x /usr/local/sbin/fa-*
+
 
 # -------- Enable/Start correcto --------
 log "Habilitando timer por interfaz y lanzando evaluación inicial…"
@@ -312,12 +391,29 @@ fi
 ok "Instalación completa.
   • Config:        /etc/default/fallback-ap
   • Script:        /usr/local/sbin/fallback-ap.sh
-  • Service:       fallback-ap@${IFACE}.service   (no se habilita, sólo se arranca)
-  • Timer:         fallback-ap@${IFACE}.timer     (habilitado)
+  • Service:       fallback-ap@"${IFACE}".service   (no se habilita, sólo se arranca)
+  • Timer:         fallback-ap@"${IFACE}".timer     (habilitado)
   • Dispatcher:    /etc/NetworkManager/dispatcher.d/50-fallback-ap
 
+Comandos útiles luego de instalar:
+  sudo systemctl daemon-reload
+  sudo systemctl disable --now fallback-ap@"${IFACE}".timer 2>/dev/null || true
+  sudo systemctl stop          fallback-ap@"${IFACE}".service 2>/dev/null || true
+  sudo systemctl enable  --now fallback-ap@"${IFACE}".timer
+  sudo systemctl start         fallback-ap@"${IFACE}".service
+
+Si no funciona la secuencia anterior, probar esta (restart y orden cambiado)
+  sudo systemctl daemon-reload
+  sudo systemctl restart "fallback-ap@${IFACE}.timer"
+  sudo systemctl start   "fallback-ap@${IFACE}.service"
+
 Comandos útiles:
-  systemctl status fallback-ap@${IFACE}.timer --no-pager
-  systemctl status fallback-ap@${IFACE}.service --no-pager
+  sudo fa-status                    # estado rapido
+  sudo fa-force-ap                  # simula perdida y levanta AP ya
+  sudo fa-force-client "TU_SSID"    # migra a cliente ya
+  sudo fa-add-wifi SSID [PSK]       # crea perfil nuevo ejemplo sudo fa-add-wifi "Pa viejos" clave
+  sudo fa-forget SSID               # olvida perfil
+  sudo fa-list                      # despliega perfiles
+
   journalctl -t fallback-ap -n 100 -f
 "

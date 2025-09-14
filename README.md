@@ -30,7 +30,17 @@ Todo queda **loggeado en `journalctl`** con la etiqueta `fallback-ap`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/geofis/RPi-auto-fallback-AP/main/install_fallback_ap.sh -o install_fallback_ap.sh
-sudo bash install_fallback_ap.sh --iface wlan0 --ssid GNSS --pass 12345678 --band bg --chan 6 --force
+sudo bash install_fallback_ap.sh --iface wlan0 --ssid GNSS --pass 12345678 --band bg --chan 6 --interval 60 --boot-delay 20 --force
+```
+
+Luego de instalar:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl disable --now 'fallback-ap@wlan0.timer' 2>/dev/null || true
+sudo systemctl stop          'fallback-ap@wlan0.service' 2>/dev/null || true
+sudo systemctl enable  --now 'fallback-ap@wlan0.timer'
+sudo systemctl start         'fallback-ap@wlan0.service'
 ```
 
 **Parámetros útiles:**
@@ -77,6 +87,8 @@ PASS="12345678"
 BAND="bg"       # 'bg' (2.4 GHz) o 'a' (5 GHz)
 CHAN="6"
 IFACE="wlan0"
+BOOT_DELAY="20"
+INTERVAL="90"
 # Opcional: elevar verbosidad de logs (0|1)
 FALLBACK_AP_DEBUG=0
 ```
