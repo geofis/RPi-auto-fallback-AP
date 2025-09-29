@@ -63,7 +63,7 @@ case "$MODE" in
     echo
     systemctl status "fallback-ap@${IFACE}.timer"   --no-pager || true
     echo
-    nmcli -g NAME,TYPE,DEVICE,GENERAL.STATE con show --active 2>/dev/null || true
+    nmcli -g NAME,TYPE,DEVICE,STATE con show --active 2>/dev/null || true
     exit 0
     ;;
   uninstall)
@@ -192,6 +192,21 @@ active_name="$(nmq -t -f NAME,DEVICE con show --active | awk -F: -v d="$IFACE" '
 mode="client"; [ "$active_name" = "fallback-ap" ] && mode="ap"
 echo "fallback-ap: check iface=$IFACE mode=$mode state=$current_state known=${#KNOWN[@]} since=${since}s"
 
+# Inhibidor para no levantar AP durante intentos manuales
+AP_INHIBITED=0
+inhibit_file="$STATE_DIR/inhibit-ap"
+if [ -f "$inhibit_file" ]; then
+  now=$(date +%s)
+  until_ts=$(cut -d: -f1 "$inhibit_file" 2>/dev/null || echo 0)
+  reason=$(cut -d: -f2- "$inhibit_file" 2>/dev/null || echo "")
+  if [ "$now" -lt "$until_ts" ]; then
+    AP_INHIBITED=1
+    echo "fallback-ap: AP inhibido hasta $until_ts ($reason)"
+  else
+    rm -f "$inhibit_file" 2>/dev/null || true
+  fi
+fi
+
 # Si estamos con el AP activo y hay redes conocidas, intenta migrar a cliente
 if [ "$active_name" = "fallback-ap" ] && [ "${#KNOWN[@]}" -gt 0 ]; then
   nmq --wait 10 dev wifi rescan
@@ -224,6 +239,12 @@ fi
 
 # Si no hay cliente, levanta AP (con backoff para no aletear)
 if [ "$current_state" != "connected" ]; then
+  # Si hay inhibición, no levantes el AP (espera a que un helper fuerce cliente)
+  if [ "$AP_INHIBITED" -eq 1 ]; then
+    echo "fallback-ap: AP inhibido, no levanto AP (esperando cliente)"
+    exit 0
+  fi
+  # Backoff
   if [ "$since" -lt "$min_interval" ] && [ "${2:-}" != "--force" ]; then
     echo "fallback-ap: backoff, último cambio hace ${since}s"
     exit 0
@@ -314,45 +335,105 @@ install -m 0755 /dev/null /usr/local/sbin/fa-status /usr/local/sbin/fa-force-ap 
 
 cat >/usr/local/sbin/fa-status <<'H'
 #!/usr/bin/env bash
-nmcli -t -f NAME,TYPE,DEVICE,GENERAL.STATE con show --active
-echo
-systemctl status 'fallback-ap@wlan0.timer' --no-pager | sed -n '1,12p'
-echo
-systemctl status 'fallback-ap@wlan0.service' --no-pager | sed -n '1,12p'
-echo
-journalctl -t fallback-ap -n 20 --no-pager || true
-H
+set -euo pipefail
+CFG="/etc/default/fallback-ap"
+IFACE="$(awk -F= '/^IFACE=/{gsub(/"/,"",$2);print $2}' "$CFG" 2>/dev/null || true)"
+[ -n "${IFACE:-}" ] || IFACE="wlan0"
 
-cat >/usr/local/sbin/fa-force-ap <<'H'
-#!/usr/bin/env bash
-# Desactiva autoconnect en todas las Wi-Fi conocidas (excepto fallback-ap) y fuerza AP
-for n in $(nmcli -t -f NAME,TYPE con show | awk -F: '$2=="wifi" && $1!="fallback-ap"{print $1}'); do
-  nmcli con mod "$n" connection.autoconnect no
-done
-nmcli dev disconnect wlan0
-/usr/local/sbin/fallback-ap.sh wlan0 --force
-nmcli -t -f NAME,TYPE,DEVICE con show --active
+nmcli -t -f NAME,TYPE,DEVICE,STATE con show --active
+echo
+systemctl status "fallback-ap@${IFACE}.timer" --no-pager | sed -n '1,12p'
+echo
+systemctl status "fallback-ap@${IFACE}.service" --no-pager | sed -n '1,12p'
+echo
+[ -f /run/fallback-ap/inhibit-ap ] && echo "INHIBIT: $(cat /run/fallback-ap/inhibit-ap)"
+journalctl -t fallback-ap -n 20 --no-pager || true
 H
 
 cat >/usr/local/sbin/fa-force-client <<'H'
 #!/usr/bin/env bash
-SSID="$1"
-[ -n "$SSID" ] || { echo "Uso: fa-force-client <SSID>"; exit 1; }
-nmcli con mod "$SSID" connection.autoconnect yes 2>/dev/null || true
+set -euo pipefail
+CFG="/etc/default/fallback-ap"
+IFACE="$(awk -F= '/^IFACE=/{gsub(/"/,"",$2);print $2}' "$CFG" 2>/dev/null || true)"
+[ -n "${IFACE:-}" ] || IFACE="wlan0"
+
+SSID="${1:-}"
+[ -n "$SSID" ] || { echo "Uso: fa-force-client \"<SSID>\""; exit 1; }
+
+# Inhibir el AP durante 90s para evitar carreras
+mkdir -p /run/fallback-ap
+echo "$(( $(date +%s) + 90 )):manual-connect:$SSID" > /run/fallback-ap/inhibit-ap
+
+# Evitar que el timer reaccione a mitad de la maniobra
+systemctl stop "fallback-ap@${IFACE}.timer" 2>/dev/null || true
+
+# Sal de AP y prepara interfaz
 nmcli con down id "fallback-ap" 2>/dev/null || true
-nmcli --wait 20 con up id "$SSID" ifname wlan0
-/usr/local/sbin/fallback-ap.sh wlan0 --force
+nmcli dev set "$IFACE" managed yes
+nmcli radio wifi on
+rfkill unblock wifi 2>/dev/null || true
+nmcli dev disconnect "$IFACE" 2>/dev/null || true
+nmcli --wait 10 dev wifi rescan || true
+
+# Asegura autoconnect y prueba conexión (SSID con espacios OK)
+nmcli con mod "$SSID" connection.autoconnect yes 2>/dev/null || true
+
+if nmcli --wait 30 con up id "$SSID" ifname "$IFACE"; then
+  echo "Conectado a \"$SSID\""
+else
+  echo "No se pudo conectar a \"$SSID\"; retomo AP"
+  systemctl start "fallback-ap@${IFACE}.service" || true
+fi
+
+# Reactiva el timer
+systemctl start "fallback-ap@${IFACE}.timer" || true
 H
 
 cat >/usr/local/sbin/fa-add-wifi <<'H'
 #!/usr/bin/env bash
-SSID="$1"; PASS="${2:-}"
-[ -n "$SSID" ] || { echo "Uso: fa-add-wifi <SSID> [PSK]"; exit 1; }
-if [ -n "$PASS" ]; then
-  nmcli dev wifi connect "$SSID" password "$PASS" ifname wlan0
+set -euo pipefail
+CFG="/etc/default/fallback-ap"
+IFACE="$(awk -F= '/^IFACE=/{gsub(/"/,"",$2);print $2}' "$CFG" 2>/dev/null || true)"
+[ -n "${IFACE:-}" ] || IFACE="wlan0"
+
+SSID="${1:-}"; PASS="${2:-}"
+[ -n "$SSID" ] || { echo "Uso: fa-add-wifi \"<SSID>\" [PSK]"; exit 1; }
+
+# Inhibir AP para poder escanear/asociar sin que vuelva el AP
+mkdir -p /run/fallback-ap
+echo "$(( $(date +%s) + 90 )):add-wifi:$SSID" > /run/fallback-ap/inhibit-ap
+systemctl stop "fallback-ap@${IFACE}.timer" 2>/dev/null || true
+nmcli con down id "fallback-ap" 2>/dev/null || true
+
+nmcli dev set "$IFACE" managed yes
+nmcli radio wifi on
+rfkill unblock wifi 2>/dev/null || true
+nmcli dev disconnect "$IFACE" 2>/dev/null || true
+nmcli --wait 10 dev wifi rescan || true
+
+# Crear/actualizar perfil idempotente (soporta SSID con espacios)
+if nmcli -t -f NAME,TYPE con show | awk -F: '$2=="wifi"{print $1}' | grep -Fxq "$SSID"; then
+  PROF="$SSID"
 else
-  nmcli dev wifi connect "$SSID" ifname wlan0
+  PROF="$SSID"
+  nmcli con add type wifi ifname "$IFACE" con-name "$PROF" ssid "$SSID"
 fi
+
+if [ -n "$PASS" ]; then
+  nmcli con modify "$PROF" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASS"
+else
+  nmcli con modify "$PROF" wifi-sec.key-mgmt none 2>/dev/null || true
+fi
+
+nmcli con modify "$PROF" connection.autoconnect yes
+
+# Intentar conectar
+if ! nmcli --wait 30 con up id "$PROF" ifname "$IFACE"; then
+  echo "No se pudo conectar a \"$SSID\"; retomo AP"
+  systemctl start "fallback-ap@${IFACE}.service" || true
+fi
+
+systemctl start "fallback-ap@${IFACE}.timer" || true
 H
 
 cat >/usr/local/sbin/fa-forget <<'H'
